@@ -4,6 +4,8 @@ Move your OpenCode config, MCP servers and user state to another machine. Covers
 
 Unofficial: this project is not affiliated with or endorsed by the OpenCode project.
 
+中文说明：[README.zh-CN.md](README.zh-CN.md)
+
 ## Why this exists
 
 OpenCode has no supported way to move its state to another machine (upstream feature request: anomalyco/opencode#54534), so this tool does it with OpenCode's own commands and plain files.
@@ -33,6 +35,8 @@ On the new machine (dry run first, nothing is written):
 opencode-portable import my.ocm
 opencode-portable import my.ocm --apply
 ```
+
+![demo](assets/demo.gif)
 
 Options:
 
