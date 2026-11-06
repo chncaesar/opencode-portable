@@ -34,9 +34,11 @@ Options:
   --session-timeout SEC   Import sessions: time limit per session (default 120)
   --keep-secrets          Export: also store MCP secret values in the encrypted bundle
                           (needs the credentials tier and mcp)
-  --fail-on-secrets       Export: exit 1 if config files hold likely inline secrets
-  --restore-mcp-secrets   Import with --apply: write the real MCP secret values back into
-                          opencode.jsonc (servers added or replaced in this run only)
+  --fail-on-secrets       Export: exit 1 if a plugin script holds an inline secret that
+                          cannot be redacted
+  --restore-secrets       Import with --apply: write real MCP and config secret values back
+                          into the files written by this run (including NAME.incoming)
+  --restore-mcp-secrets   Deprecated alias for --restore-secrets (MCP servers only)
   --passphrase-file PATH  Read the credentials passphrase from a file (chmod 600).
                           Or set OPENCODE_PORTABLE_PASSPHRASE, or type it when asked.
                           There is deliberately no --passphrase option.
@@ -70,6 +72,7 @@ export async function main(argv: string[], out: (s: string) => void = console.lo
         "keep-secrets": { type: "boolean" },
         "fail-on-secrets": { type: "boolean" },
         "restore-mcp-secrets": { type: "boolean" },
+        "restore-secrets": { type: "boolean" },
         "passphrase-file": { type: "string" },
         passphrase: { type: "string" },
         since: { type: "string" },
@@ -150,6 +153,7 @@ export async function main(argv: string[], out: (s: string) => void = console.lo
         scanRoots: values["scan-root"],
         passphrase: pp,
         restoreMcpSecrets: values["restore-mcp-secrets"],
+        restoreSecrets: values["restore-secrets"],
         importDetachedTo: values["import-detached-to"],
         sessionTimeout: positiveInt(values["session-timeout"], "--session-timeout"),
       });

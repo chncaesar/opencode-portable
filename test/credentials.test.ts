@@ -284,7 +284,7 @@ describe("import with credentials", () => {
     expect(text).toContain("Work (anthropic)");
     expect(text).toContain("Personal (openai)");
     expect(text).toContain("GITHUB_TOKEN");
-    expect(text).toMatch(/--restore-mcp-secrets: real values will be written/);
+    expect(text).toMatch(/--restore-mcp-secrets: real values will be written for the MCP servers/);
     for (const s of [KEY1, KEY2, ...MCP_VALUES]) expect(text).not.toContain(s);
     expect(fake.calls().filter((a) => a[0] === "auth")).toEqual([]);
     expect(fake.state(tp).authImports).toBeUndefined();
@@ -343,8 +343,8 @@ describe("import with credentials", () => {
     expect(cfg.mcp.remote1.headers.Authorization).toBe("Bearer hdr-secret-999");
     expect(plan.mcp.find((m) => m.name === "github")!.restored).toBeUndefined();
     const msg = formatPlan(plan, { written: [], backups: [] });
-    expect(msg).toMatch(/Real secret values were written into opencode\.jsonc for: .*postgres/);
-    expect(msg).not.toMatch(/written into opencode\.jsonc for: .*github/);
+    expect(msg).toMatch(/Real secret values were written into opencode\.jsonc for MCP servers: .*postgres/);
+    expect(msg).not.toMatch(/MCP servers: .*github/);
     for (const s of MCP_VALUES) expect(msg).not.toContain(s);
     // second run is idempotent for the restored servers
     const again = await planImport({ archive: out, ...tgt, tiers: ["mcp", "credentials"], apply: true, passphrase: staticPass(), restoreMcpSecrets: true });

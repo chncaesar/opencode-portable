@@ -31,7 +31,9 @@ export interface Manifest {
   sessions?: { count: number; sanitized: boolean };
   /** Present when secrets.enc is in the archive. Contents (labels, counts) are only visible after decrypting. */
   credentials?: { bundle: string; kdf: string };
-  /** Where the export scanner saw likely inline secrets (locations only, never values). */
+  /** Inline config secrets the export replaced with {env:NAME} markers (locations and marker names, never values). */
+  configRedactions?: { file: string; where: string; key?: string; name: string }[];
+  /** Inline secrets in plugin scripts that could not be redacted (locations only, never values). */
   inlineSecrets?: { file: string; where: string; key?: string; kind: string }[];
   mcp?: {
     servers: { name: string; type: string }[];

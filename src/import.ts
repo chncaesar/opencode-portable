@@ -23,6 +23,7 @@ import { listSessions, opencodeBin, runOpencode, type SessionInfo } from "./open
 import type { PassphraseProvider } from "./passphrase.js";
 import { authLabels, BUNDLE_NAME, collectSecretStrings, decryptBundle, scrub, type BundlePayload } from "./secrets.js";
 import { parseRule, type PathRule } from "./paths.js";
+import { restoreConfigMarkers } from "./redact.js";
 import {
   applySessions,
   defaultScanRoots,
@@ -45,6 +46,9 @@ export interface ImportOptions extends DirOptions {
   overwriteConfig?: boolean;
   scanRoots?: string[];
   passphrase?: PassphraseProvider;
+  /** Restore both MCP and config markers from the bundle (--restore-secrets). */
+  restoreSecrets?: boolean;
+  /** Deprecated alias for --restore-mcp-secrets (MCP only). */
   restoreMcpSecrets?: boolean;
   importDetachedTo?: string;
   sessionTimeout?: number;
@@ -62,6 +66,8 @@ export interface FileAction {
   target: string;
   data?: Buffer;
   note?: string;
+  /** True when real secret values were restored into this file (--restore-secrets). */
+  restoredSecrets?: boolean;
 }
 
 export interface McpAction {
@@ -82,9 +88,12 @@ export interface CredentialsPlan {
   payload?: BundlePayload;
   labels: string[];
   mcpSecretNames: string[];
+  configSecretNames: string[];
   /** Why credentials will not be imported in this run, if so. */
   skippedReason?: string;
   restoreRequested: boolean;
+  /** True when the restore came from the --restore-secrets flag (vs the MCP-only alias). */
+  restoreAll?: boolean;
 }
 
 export interface Plan {
@@ -97,6 +106,10 @@ export interface Plan {
   mcp: McpAction[];
   /** Placeholder names that need a real value on this machine. */
   missingSecrets: string[];
+  /** Config marker names (file/path) that will be written but have no value available. */
+  configMissingSecrets: { name: string; file: string; where: string }[];
+  /** Config files that received restored secrets (paths written). */
+  restoredConfigFiles: string[];
   warnings: string[];
   sessions?: SessionsPlan;
   credentials?: CredentialsPlan;
@@ -153,7 +166,9 @@ export async function planImport(opts: ImportOptions): Promise<Plan> {
       bundleBytes: bundleFile.size,
       labels: [],
       mcpSecretNames: [],
-      restoreRequested: !!opts.restoreMcpSecrets,
+      configSecretNames: [],
+      restoreRequested: !!(opts.restoreSecrets || opts.restoreMcpSecrets),
+      restoreAll: !!opts.restoreSecrets,
     };
     const explicit = !!opts.tiers?.includes("credentials");
     const pp = opts.passphrase;
@@ -163,7 +178,7 @@ export async function planImport(opts: ImportOptions): Promise<Plan> {
     if (wantsDecrypt) {
       try {
         if (!pp || (!pp.hasStaticSource && !pp.canPrompt)) {
-          if (explicit || opts.restoreMcpSecrets) {
+          if (explicit || opts.restoreSecrets || opts.restoreMcpSecrets) {
             throw new UserError("A passphrase is needed for the credentials bundle. Use --passphrase-file PATH or set OPENCODE_PORTABLE_PASSPHRASE.");
           }
           credentials.skippedReason = "no passphrase available; run again with --tiers credentials and --passphrase-file PATH to import them";
@@ -172,18 +187,24 @@ export async function planImport(opts: ImportOptions): Promise<Plan> {
           credentials.payload = payload;
           credentials.labels = authLabels(payload.auth);
           credentials.mcpSecretNames = Object.keys(payload.mcpSecrets).sort();
+          credentials.configSecretNames = Object.keys(payload.configSecrets ?? {}).sort();
         }
       } catch (e) {
         if (extractDir) rmSync(extractDir, { recursive: true, force: true });
         throw e;
       }
     }
-  } else if (opts.restoreMcpSecrets) {
+  } else if (opts.restoreSecrets || opts.restoreMcpSecrets) {
     if (extractDir) rmSync(extractDir, { recursive: true, force: true });
-    throw new UserError("--restore-mcp-secrets needs a credentials bundle in the archive, and --tiers (if given) must include credentials. Export with --tiers config,mcp,credentials and --keep-secrets.");
+    throw new UserError("--restore-secrets / --restore-mcp-secrets needs a credentials bundle in the archive, and --tiers (if given) must include credentials. Export with --tiers config,mcp,credentials and --keep-secrets.");
   }
-  const restoreSecrets = opts.apply && opts.restoreMcpSecrets ? credentials?.payload?.mcpSecrets : undefined;
-  if (opts.restoreMcpSecrets && opts.apply && !tiers.includes("mcp")) warnings.push("--restore-mcp-secrets has no effect without the mcp tier.");
+  const wantRestore = !!(opts.restoreSecrets || opts.restoreMcpSecrets);
+  const mcpRestoreMap = opts.apply && wantRestore ? credentials?.payload?.mcpSecrets : undefined;
+  const configRestoreMap = opts.apply && opts.restoreSecrets ? credentials?.payload?.configSecrets : undefined;
+  const allRestoreMap = opts.apply && wantRestore
+    ? { ...(credentials?.payload?.mcpSecrets ?? {}), ...(credentials?.payload?.configSecrets ?? {}) }
+    : undefined;
+  if (wantRestore && opts.apply && !tiers.includes("mcp") && !tiers.includes("config")) warnings.push("--restore-secrets has no effect without the mcp or config tier.");
 
   const rules: PathRule[] = (opts.maps ?? []).map(parseRule);
   if (manifest.sourceHome && manifest.sourceHome !== dirs.home) rules.push({ src: manifest.sourceHome, dst: dirs.home });
@@ -244,8 +265,8 @@ export async function planImport(opts: ImportOptions): Promise<Plan> {
       let incoming = rewriteServerPaths(srv, rules);
       if (opts.importMcpDisabled) incoming.enabled = false;
       let restoredNames: Set<string> | undefined;
-      if (restoreSecrets) {
-        const r = restoreMarkers(incoming, restoreSecrets);
+      if (mcpRestoreMap) {
+        const r = restoreMarkers(incoming, mcpRestoreMap);
         const had = (manifest.mcp?.redactions ?? []).filter((x) => x.server === name).map((x) => x.name);
         restoredNames = new Set(had.filter((n) => !r.missing.includes(n)));
         incoming = r.server;
@@ -290,8 +311,38 @@ export async function planImport(opts: ImportOptions): Promise<Plan> {
     }
   }
 
+  // Restore config markers in files that will actually be written by this run (including .incoming).
+  const restoredConfigFiles: string[] = [];
+  const configMissingSecrets: { name: string; file: string; where: string }[] = [];
+  if (tiers.includes("config") && manifest.configRedactions?.length) {
+    const byFile = new Map<string, (typeof manifest.configRedactions)[number][]>();
+    for (const r of manifest.configRedactions) byFile.set(r.file, [...(byFile.get(r.file) ?? []), r]);
+    for (const a of actions) {
+      if (!a.data || !(a.kind === "add" || a.kind === "overwrite" || a.kind === "incoming" || a.kind === "update")) continue;
+      const base = a.kind === "incoming" ? a.target : a.path;
+      const rel = base.replace(dirs.configDir, "").replace(/^[\\/]/, "");
+      const key = `config/${rel}`;
+      const recs = byFile.get(key) ?? [];
+      if (recs.length === 0) continue;
+      const names = recs.map((r) => r.name);
+      if (configRestoreMap) {
+        const restored = restoreConfigMarkers(a.data.toString("utf8"), names, configRestoreMap);
+        if (restored.missing.length === 0) {
+          a.data = Buffer.from(restored.text, "utf8");
+          a.restoredSecrets = true;
+          restoredConfigFiles.push(key);
+        } else {
+          for (const n of restored.missing) configMissingSecrets.push({ name: n, file: key, where: recs.find((r) => r.name === n)?.where ?? "" });
+        }
+      }
+      for (const r of recs) {
+        if (!configRestoreMap || !(r.name in configRestoreMap)) configMissingSecrets.push({ name: r.name, file: r.file, where: r.where });
+      }
+    }
+  }
+
   if (tiers.includes("config") && manifest.inlineSecrets?.length) {
-    warnings.push(`The archive's config files hold ${manifest.inlineSecrets.length} possible inline secret(s) in plain text: ${manifest.inlineSecrets.map((f) => `${f.file} at ${f.where}`).join("; ")}.`);
+    warnings.push(`The archive's plugin scripts hold ${manifest.inlineSecrets.length} possible inline secret(s) in plain text that could not be redacted: ${manifest.inlineSecrets.map((f) => `${f.file} at ${f.where}`).join("; ")}.`);
   }
   if (manifest.files.some((f) => f.path === "config/package.json") && tiers.includes("config")) {
     warnings.push("Plugins listed in package.json are not installed by this tool. Start OpenCode once or run your package manager in the config directory.");
@@ -351,6 +402,8 @@ export async function planImport(opts: ImportOptions): Promise<Plan> {
     files: actions,
     mcp: mcpActions,
     missingSecrets: [...missingSecrets].sort(),
+    configMissingSecrets,
+    restoredConfigFiles,
     warnings,
   };
 }
@@ -371,6 +424,8 @@ export function applyPlan(plan: Plan): ApplyResult {
     const tmp = `${a.path}.tmp-${process.pid}`;
     writeFileSync(tmp, a.data);
     renameSync(tmp, a.path);
+    // Files that received restored secrets are private, like the source config on POSIX.
+    if (a.restoredSecrets && process.platform !== "win32") chmodSync(a.path, 0o600);
     written.push(a.path);
   }
   return { written, backups };
@@ -484,16 +539,25 @@ function formatCredentials(plan: Plan, applied: boolean, outcome?: CredentialsOu
   else {
     L.push(`  ${applied ? "In the bundle" : "Decrypted for preview"}: ${c.labels.length} integration(s): ${c.labels.join(", ") || "none"}`);
     L.push("  They are imported with `opencode auth import`. A credential that already exists on this machine is left untouched.");
+    const willRestore = new Set(
+      plan.mcp.filter((m) => m.kind === "add" || m.kind === "overwrite").flatMap((m) => (plan.manifest.mcp?.redactions ?? []).filter((r) => r.server === m.name).map((r) => r.name)),
+    );
     if (c.mcpSecretNames.length) {
-      const willRestore = new Set(
-        plan.mcp.filter((m) => m.kind === "add" || m.kind === "overwrite").flatMap((m) => (plan.manifest.mcp?.redactions ?? []).filter((r) => r.server === m.name).map((r) => r.name)),
-      );
       const names = c.mcpSecretNames.map((n) => `${n}${willRestore.has(n) ? "" : " (server not imported in this run)"}`);
       L.push(`  MCP secrets in the bundle: ${names.join(", ")}`);
+    }
+    if (c.configSecretNames.length) {
+      const used = new Set((plan.manifest.configRedactions ?? []).map((r) => r.name));
+      const names = c.configSecretNames.map((n) => `${n}${used.has(n) ? "" : " (not in the files being written)"}`);
+      L.push(`  Config secrets in the bundle: ${names.join(", ")}`);
+    }
+    if (c.mcpSecretNames.length || c.configSecretNames.length) {
       L.push(
         c.restoreRequested
-          ? "  --restore-mcp-secrets: real values will be written into opencode.jsonc for the servers added or replaced in this run."
-          : "  They stay as {env:NAME} markers unless you pass --restore-mcp-secrets with --apply.",
+          ? c.restoreAll
+            ? "  --restore-secrets: real values will be written for the servers and files changed in this run."
+            : "  --restore-mcp-secrets: real values will be written for the MCP servers changed in this run."
+          : "  They stay as {env:NAME} markers unless you pass --restore-secrets with --apply (--restore-mcp-secrets still works for MCP only).",
       );
     }
   }
@@ -531,11 +595,14 @@ export function formatPlan(plan: Plan, applied?: ApplyResult, outcome?: Sessions
       if (s.kind === "conflict") L.push(`      Already exists here. Not changed. Use --overwrite-mcp ${s.name} to replace it.`);
     }
   }
-  if (plan.missingSecrets.length) {
+  if (plan.missingSecrets.length || plan.configMissingSecrets.length) {
     L.push("", "Values you must fill in (they were removed from the archive for safety)");
     for (const n of plan.missingSecrets) {
       const where = plan.mcp.flatMap((s) => s.missing.filter((r) => r.name === n).map((r) => `${r.server} ${r.location}`));
       L.push(`  ${"{env:" + n + "}"}  used by ${where.join(", ")}`);
+    }
+    for (const c of plan.configMissingSecrets) {
+      L.push(`  ${"{env:" + c.name + "}"}  used by ${c.file} at ${c.where}`);
     }
     L.push("  OpenCode expands {env:NAME} from the environment when it starts. Set each variable in your shell profile (or replace the marker in opencode.jsonc with the real value).");
   }
@@ -543,7 +610,10 @@ export function formatPlan(plan: Plan, applied?: ApplyResult, outcome?: Sessions
   L.push(...formatCredentials(plan, !!applied, cred));
   const restoredServers = plan.mcp.filter((m) => m.restored).map((m) => m.name);
   if (applied && restoredServers.length) {
-    L.push("", `Real secret values were written into opencode.jsonc for: ${restoredServers.join(", ")}. They were literal values on the source machine too.`);
+    L.push("", `Real secret values were written into opencode.jsonc for MCP servers: ${restoredServers.join(", ")}. They were literal values on the source machine too.`);
+  }
+  if (applied && plan.restoredConfigFiles.length) {
+    L.push("", `Real secret values were written into these files: ${plan.restoredConfigFiles.join(", ")}. They were literal values on the source machine too.`);
   }
   for (const w of plan.warnings) L.push("", `Note: ${w}`);
   if (applied) {

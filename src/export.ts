@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ArchiveBuilder, FORMAT_VERSION, type ArchiveEntry, type Manifest } from "./archive.js";
-import { describeFinding, scanFile, type SecretFinding } from "./scan.js";
+import { describeFinding, isPluginScript, scanFile, type SecretFinding } from "./scan.js";
+import { redactJsonc, type RedactionRecord } from "./redact.js";
 import { opencodeBin, runOpencode, spawnSpec } from "./opencode.js";
 import { authLabels, BUNDLE_NAME, encryptBundle, validateAuthArray, type BundlePayload } from "./secrets.js";
 import { exportSessionsInto } from "./sessions.js";
@@ -94,11 +95,8 @@ export function findMainConfig(configDir: string): string | null {
 }
 
 export async function runExport(opts: ExportOptions): Promise<ExportResult> {
-  if (opts.keepSecrets) {
-    if (!opts.tiers.includes("credentials")) {
-      throw new UserError("--keep-secrets stores MCP secret values in the encrypted bundle, so it needs the credentials tier. Add it, for example: --tiers config,mcp,credentials");
-    }
-    if (!opts.tiers.includes("mcp")) throw new UserError("--keep-secrets applies to MCP servers. Add mcp to --tiers.");
+  if (opts.keepSecrets && !opts.tiers.includes("credentials")) {
+    throw new UserError("--keep-secrets stores secret values in the encrypted bundle, so it needs the credentials tier. Add it, for example: --tiers config,mcp,credentials");
   }
   const dirs = resolveDirs(opts);
   const warnings: string[] = [];
@@ -107,6 +105,7 @@ export async function runExport(opts: ExportOptions): Promise<ExportResult> {
   let mcpInfo: Manifest["mcp"];
   let mcpLayout: McpLayout | undefined;
   let mcpSecrets: Record<string, string> = {};
+  let configSecrets: Record<string, string> = {};
 
   const mainName = findMainConfig(dirs.configDir);
   let mainText: string | null = null;
@@ -157,10 +156,33 @@ export async function runExport(opts: ExportOptions): Promise<ExportResult> {
     }
   }
 
-  const findings: SecretFinding[] = entries.flatMap((e) => (e.tier === "config" ? scanFile(e.path, e.data) : []));
-  for (const f of findings) warnings.push(`Possible inline secret: ${describeFinding(f)}`);
-  if (opts.failOnSecrets && findings.length > 0) {
-    throw new UserError(`${findings.length} possible inline secret(s) found in config files (see the notes above; values are never printed). Move them to environment variables with {env:NAME}, or run without --fail-on-secrets.\n${findings.map((f) => `  - ${describeFinding(f)}`).join("\n")}`);
+  // Redact inline secrets in JSON/JSONC config files; warn (do not touch) plugin scripts.
+  const pluginFindings: SecretFinding[] = [];
+  const configRedactions: RedactionRecord[] = [];
+  if (opts.tiers.includes("config")) {
+    const usedNames = new Set<string>(Object.keys(mcpSecrets));
+    const values = new Map<string, string>();
+    for (const e of entries) {
+      if (e.tier !== "config") continue;
+      if (isPluginScript(e.path)) {
+        pluginFindings.push(...scanFile(e.path, e.data));
+        continue;
+      }
+      if (!/\.(jsonc?)$/.test(e.path)) continue;
+      const r = redactJsonc(e.path, e.data, usedNames, values);
+      if (r.records.length > 0) {
+        e.data = Buffer.from(r.text, "utf8");
+        configRedactions.push(...r.records);
+      }
+    }
+    if (opts.keepSecrets) configSecrets = Object.fromEntries(values);
+    for (const f of pluginFindings) warnings.push(`Possible inline secret in plugin code (not changed): ${describeFinding(f)}`);
+    if (configRedactions.length > 0) {
+      opts.log?.(`${configRedactions.length} inline secret(s) in config were replaced with {env:NAME} markers.`);
+    }
+  }
+  if (opts.failOnSecrets && pluginFindings.length > 0) {
+    throw new UserError(`${pluginFindings.length} inline secret(s) in plugin code could not be redacted (values are never printed). Move them to environment variables, or run without --fail-on-secrets.\n${pluginFindings.map((f) => `  - ${describeFinding(f)}`).join("\n")}`);
   }
   const builder = new ArchiveBuilder();
   try {
@@ -195,17 +217,19 @@ export async function runExport(opts: ExportOptions): Promise<ExportResult> {
         throw new UserError("OpenCode returned credentials in an unexpected format.");
       }
       const nMcp = Object.keys(mcpSecrets).length;
-      if (auth.length === 0 && nMcp === 0) {
+      const nCfg = Object.keys(configSecrets).length;
+      if (auth.length === 0 && nMcp === 0 && nCfg === 0) {
         warnings.push("No stored credentials were found, so no credentials bundle was created.");
       } else {
         if (!opts.passphrase) throw new UserError("A passphrase is needed to encrypt the credentials.");
         const pass = typeof opts.passphrase === "function" ? await opts.passphrase() : opts.passphrase;
-        const payload: BundlePayload = { auth, mcpSecrets };
+        const payload: BundlePayload = { auth, mcpSecrets, ...(Object.keys(configSecrets).length ? { configSecrets } : {}) };
         opts.log?.("Encrypting credentials (this takes a moment)...");
         builder.add(BUNDLE_NAME, "credentials", await encryptBundle(payload, pass));
         credentialsInfo = { bundle: BUNDLE_NAME, kdf: "scrypt-N131072-r8-p1/aes-256-gcm" };
         if (auth.length > 0) opts.log?.(`Credentials: ${auth.length} integration(s): ${authLabels(auth).join(", ")}`);
         if (nMcp > 0) opts.log?.(`MCP secrets kept in the encrypted bundle: ${nMcp}`);
+        if (nCfg > 0) opts.log?.(`Config secrets kept in the encrypted bundle: ${nCfg}`);
         warnings.push("Remote MCP OAuth tokens are not transferred. On the new machine run: opencode mcp auth <name>");
       }
     }
@@ -223,7 +247,8 @@ export async function runExport(opts: ExportOptions): Promise<ExportResult> {
       ...(mcpInfo ? { mcp: mcpInfo, mcpLayout } : {}),
       ...(sessionInfo ? { sessions: sessionInfo } : {}),
       ...(credentialsInfo ? { credentials: credentialsInfo } : {}),
-      ...(findings.length ? { inlineSecrets: findings } : {}),
+      ...(configRedactions.length ? { configRedactions: configRedactions.map(({ file, where, key, name }) => ({ file, where, ...(key ? { key } : {}), name })) } : {}),
+      ...(pluginFindings.length ? { inlineSecrets: pluginFindings } : {}),
     });
     return { out, manifest, warnings };
   } finally {

@@ -44,8 +44,12 @@ export async function inspectArchive(file: string): Promise<string> {
     const f = m.files.find((x) => x.path === "secrets.enc");
     L.push("", f ? `Credentials: encrypted bundle present (${f.size} bytes). Not decrypted by inspect.` : "Credentials: tier listed but no bundle is present.");
   }
+  if (m.configRedactions?.length) {
+    L.push("", `Inline config secrets replaced with {env:NAME} markers (${m.configRedactions.length})`);
+    for (const r of m.configRedactions) L.push(`  ${r.file} at ${r.where}${r.key ? ` (key "${r.key}")` : ""} -> {env:${r.name}}`);
+  }
   if (m.inlineSecrets?.length) {
-    L.push("", `Possible inline secrets in config files (${m.inlineSecrets.length}; values are in the archive as plain text)`);
+    L.push("", `Possible inline secrets in plugin scripts (${m.inlineSecrets.length}; values are in the archive as plain text)`);
     for (const f of m.inlineSecrets) L.push(`  ${f.file} at ${f.where}${f.key ? ` (key "${f.key}")` : ""}`);
   }
   if (m.links.length) {

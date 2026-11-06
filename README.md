@@ -42,7 +42,7 @@ Options:
 - `--import-mcp-disabled` add new MCP servers with `enabled: false`.
 - `--overwrite-mcp NAME` replace an existing MCP server (repeatable). Without it, existing servers are never changed.
 - `--overwrite-config` overwrite differing files. By default they are written as `NAME.incoming`.
-- `--fail-on-secrets` (export) exits with an error if the config files hold likely inline secrets.
+- `--fail-on-secrets` (export) exits with an error if a plugin script holds an inline secret that cannot be redacted.
 - `--config-dir`, `--state-dir`, `--home` override locations. `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured.
 
 ## Sessions
@@ -72,15 +72,20 @@ Sessions already on this machine are skipped when the local copy is the same age
 
 On `--apply` the confirmed mapping is written to `<archive>.mapping.json` and reused on later imports. An explicit `--map` still wins over the file. Message text is never rewritten; only the target directory is chosen.
 
-## Inline secret warnings
+## Inline config secrets
 
-When the config tier is exported, `opencode.jsonc` (outside the `mcp` block, which is handled separately), `tui.json` and plugin scripts (`plugins/*.js`, `.mjs`, `.ts`, `.json`) are scanned for likely inline secrets: values under keys such as key, token, secret or password, and well-known token formats (`sk-`, `ghp_`, `github_pat_`, `xoxb-`, `AKIA...`, long Bearer tokens). Values already written as `{env:NAME}` or `{file:...}` are fine. Findings are warnings that show the file and location only, never the value; the export still contains the file as is. Add `--fail-on-secrets` to stop instead. Markdown commands and skills are not scanned.
+When the config tier is exported, structured JSON/JSONC files — `opencode.jsonc` (outside the `mcp` block, which is handled separately), `tui.json` and `plugins/*.json` — are scanned for likely inline secrets: values under keys such as key, token, secret or password, and well-known token formats (`sk-`, `ghp_`, `github_pat_`, `xoxb-`, `AKIA...`, long Bearer tokens). Values already written as `{env:NAME}` or `{file:...}` are left alone.
+
+By default every secret found is replaced with a `{env:NAME}` marker in the archived copy, using the JSON path for the name (for example `provider.anthropic.options.apiKey` becomes `{env:PROVIDER_ANTHROPIC_OPTIONS_APIKEY}`). Comments and formatting survive, and the source file on your machine is never touched. The export prints the list of replacements (file, path, marker — never the value), and `inspect` shows it too.
+
+Plugin scripts (`plugins/*.js`, `.mjs`, `.ts`) cannot be redacted safely, so they are only reported as warnings and copied unchanged. `--fail-on-secrets` makes export stop instead, but only for those unreducible files.
 
 ## Credentials and security model
 
 Credentials are opt-in: add `credentials` to `--tiers`. They are never in the default tiers.
 
-- What is encrypted: the output of `opencode auth export` (provider API keys and other stored credentials), and, with `--keep-secrets`, the real values of MCP secrets that were replaced by `{env:NAME}` markers in the archived config. Both are stored in one file inside the archive, `secrets.enc`, encrypted with AES-256-GCM. The key comes from your passphrase through scrypt (N=2^17, r=8, p=1, random salt). The parameters are stored in the file header and authenticated, so they can be raised later.
+- What is encrypted: the output of `opencode auth export` (provider API keys and other stored credentials), and, with `--keep-secrets`, the real values of the MCP and config secrets that were replaced by `{env:NAME}` markers in the archived config. All of it is stored in one file inside the archive, `secrets.enc`, encrypted with AES-256-GCM. The key comes from your passphrase through scrypt (N=2^17, r=8, p=1, random salt). The parameters are stored in the file header and authenticated, so they can be raised later. Without `--keep-secrets` the redacted values are simply dropped.
+- By default the archive never contains those config secrets at all — they are replaced by markers before anything is written.
 - What is not encrypted: everything else in the archive. Config files, the MCP block (secrets already replaced by markers), user state and session transcripts are plain files. Session transcripts may contain secrets (keys pasted into chats, file contents, command output), so keep every archive private. Labels of credentials are only visible after decrypting.
 - Never exported: `service.json` and `auth.json` are not read. Credentials come only from `opencode auth export`.
 - Remote MCP OAuth tokens are not transferred, because their storage location is not verified. On the new machine run `opencode mcp auth <name>` for each remote server.
@@ -93,7 +98,9 @@ Export example:
 opencode-portable export --tiers config,mcp,credentials --keep-secrets --passphrase-file ~/.ocm-pass --out my.ocm
 ```
 
-Import: a dry run says the archive contains an encrypted bundle. If a passphrase is available through the file or the environment variable, it also lists the credential labels and the names (never values) of the MCP secrets. With `--apply` the credentials are handed to `opencode auth import` through a temporary file (mode 0600) that is deleted afterwards. A credential that already exists on the machine is left untouched. `--restore-mcp-secrets` (with `--apply`) writes the real MCP secret values into `opencode.jsonc`, only for servers added or replaced in that run, and prints which servers now contain literal secrets. Without it the `{env:NAME}` markers stay.
+Import: a dry run says the archive contains an encrypted bundle. If a passphrase is available through the file or the environment variable, it also lists the credential labels and the names (never values) of the MCP and config secrets. With `--apply` the credentials are handed to `opencode auth import` through a temporary file (mode 0600) that is deleted afterwards. A credential that already exists on the machine is left untouched.
+
+`--restore-secrets` (with `--apply`) writes the real MCP and config secret values into the files written by that run — including `NAME.incoming` files — and prints which files now contain literal secrets. On POSIX those files are written with mode 0600. `--restore-mcp-secrets` is a deprecated alias that restores MCP servers only. Without either flag the `{env:NAME}` markers stay and the plan lists the values you still need to fill in.
 
 If you import without `--tiers` and no passphrase is available, credentials are skipped with a note. Pass `--tiers credentials` to make it an error instead.
 

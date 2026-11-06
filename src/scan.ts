@@ -1,11 +1,10 @@
 import { parseTree, type Node } from "jsonc-parser";
 
-/** A likely inline secret. Holds where it is, never the value. */
+/** A likely inline secret in a plugin script (files that cannot be redacted safely). */
 export interface SecretFinding {
   file: string;
-  /** JSON path (for JSON files) or "line N" (for scripts). */
+  /** "line N". */
   where: string;
-  /** The key name, when there is one. */
   key?: string;
   kind: "key-name" | "token-shape";
 }
@@ -25,33 +24,9 @@ const MIN_VALUE_LENGTH = 6;
 const hasTokenShape = (v: string): boolean => TOKEN_SHAPES.some((r) => r.test(v));
 const looksLikeSecretValue = (v: string): boolean => v.length >= MIN_VALUE_LENGTH && !/\s/.test(v) && !REF_RE.test(v);
 
-/** Files worth scanning, by archive path. Prose (Markdown, commands, skills) is deliberately not scanned. */
-export function isScannable(path: string): boolean {
-  if (/^config\/opencode\.jsonc?$/.test(path) || path === "config/tui.json") return true;
-  return /^config\/plugins?\/[^/]+\.(js|mjs|ts|json)$/.test(path);
-}
-
-function scanJson(file: string, text: string, out: SecretFinding[]): void {
-  const root = parseTree(text, [], { allowTrailingComma: true });
-  if (!root) return;
-  const visit = (n: Node, path: (string | number)[], key: string | undefined, underKeybinds: boolean): void => {
-    const where = path.length ? path.map((p) => (typeof p === "number" ? `[${p}]` : `.${p}`)).join("").replace(/^\./, "") : "(root)";
-    if (n.type === "string" && typeof n.value === "string") {
-      const v = n.value;
-      if (REF_RE.test(v)) return;
-      if (key && !underKeybinds && KEY_RE.test(key) && looksLikeSecretValue(v)) out.push({ file, where, key, kind: "key-name" });
-      else if (hasTokenShape(v)) out.push({ file, where, ...(key ? { key } : {}), kind: "token-shape" });
-    } else if (n.type === "object") {
-      for (const prop of n.children ?? []) {
-        const [k, v] = prop.children ?? [];
-        if (!k || !v || typeof k.value !== "string") continue;
-        visit(v, [...path, k.value], k.value, underKeybinds || /^keybinds?$/i.test(k.value));
-      }
-    } else if (n.type === "array") {
-      (n.children ?? []).forEach((c, i) => visit(c, [...path, i], key, underKeybinds));
-    }
-  };
-  visit(root, [], undefined, false);
+/** Plugin script files, the only non-JSON config files that are scanned for inline secrets. */
+export function isPluginScript(path: string): boolean {
+  return /^config\/plugins?\/[^/]+\.(js|mjs|ts)$/.test(path);
 }
 
 const ASSIGN_RE = /(["']?)([A-Za-z0-9_.-]+)\1\s*[:=]\s*(["'`])([^"'`\n]+)\3/g;
@@ -69,17 +44,16 @@ function scanScript(file: string, text: string, out: SecretFinding[]): void {
   });
 }
 
+/** Scan a plugin script for inline secrets that cannot be redacted. */
 export function scanFile(archivePath: string, data: Buffer): SecretFinding[] {
-  if (!isScannable(archivePath)) return [];
-  const text = data.toString("utf8");
+  if (!isPluginScript(archivePath)) return [];
   const out: SecretFinding[] = [];
-  if (/\.(jsonc?)$/.test(archivePath)) scanJson(archivePath, text, out);
-  else scanScript(archivePath, text, out);
+  scanScript(archivePath, data.toString("utf8"), out);
   return out;
 }
 
 export function describeFinding(f: SecretFinding): string {
   const k = f.key ? ` (key "${f.key}")` : "";
   const why = f.kind === "token-shape" ? "looks like a known token format" : "looks like a stored secret";
-  return `${f.file} at ${f.where}${k} ${why}. Consider replacing it with {env:NAME}.`;
+  return `${f.file} at ${f.where}${k} ${why}.`;
 }

@@ -30,6 +30,8 @@ const MAX_P = 16;
 export interface BundlePayload {
   auth: unknown[];
   mcpSecrets: Record<string, string>;
+  /** Redacted inline config secret values, marker name -> value. Absent in bundles written before M3.5. */
+  configSecrets?: Record<string, string>;
 }
 
 export const BAD_BUNDLE = "The passphrase is wrong or the credentials file was changed.";
@@ -89,7 +91,8 @@ export async function decryptBundle(data: Buffer, passphrase: string): Promise<B
     key.fill(0);
     const j = JSON.parse(plain.toString("utf8"));
     if (!j || !Array.isArray(j.auth) || typeof j.mcpSecrets !== "object" || j.mcpSecrets === null) return fail();
-    return { auth: j.auth, mcpSecrets: j.mcpSecrets as Record<string, string> };
+    if (j.configSecrets !== undefined && (typeof j.configSecrets !== "object" || j.configSecrets === null)) return fail();
+    return { auth: j.auth, mcpSecrets: j.mcpSecrets as Record<string, string>, ...(j.configSecrets ? { configSecrets: j.configSecrets as Record<string, string> } : {}) };
   } catch {
     return fail();
   }
