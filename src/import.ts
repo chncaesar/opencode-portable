@@ -290,6 +290,9 @@ export async function planImport(opts: ImportOptions): Promise<Plan> {
     }
   }
 
+  if (tiers.includes("config") && manifest.inlineSecrets?.length) {
+    warnings.push(`The archive's config files hold ${manifest.inlineSecrets.length} possible inline secret(s) in plain text: ${manifest.inlineSecrets.map((f) => `${f.file} at ${f.where}`).join("; ")}.`);
+  }
   if (manifest.files.some((f) => f.path === "config/package.json") && tiers.includes("config")) {
     warnings.push("Plugins listed in package.json are not installed by this tool. Start OpenCode once or run your package manager in the config directory.");
   }

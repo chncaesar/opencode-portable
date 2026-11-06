@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { IS_WIN } from "./helpers.js";
 import { join } from "node:path";
 import { tmp } from "./helpers.js";
 
@@ -105,13 +106,16 @@ export interface FakeState {
 
 export class FakeOpencode {
   readonly dir = tmp("ocm-fake-");
-  readonly bin = join(this.dir, "opencode");
+  /** The Node script. On Windows it is started through a .cmd wrapper, since a shebang script cannot run there. */
+  readonly script = join(this.dir, IS_WIN ? "opencode-fake.cjs" : "opencode");
+  readonly bin = IS_WIN ? join(this.dir, "opencode.cmd") : this.script;
   readonly log = join(this.dir, "calls.log");
   private saved: Record<string, string | undefined> = {};
 
   constructor() {
-    writeFileSync(this.bin, SCRIPT);
-    chmodSync(this.bin, 0o755);
+    writeFileSync(this.script, SCRIPT);
+    if (IS_WIN) writeFileSync(this.bin, `@echo off\r\nnode "%~dp0opencode-fake.cjs" %*\r\n`);
+    else chmodSync(this.bin, 0o755);
   }
 
   /** Point the tool at a fake machine described by `state`. Returns the state file path. */

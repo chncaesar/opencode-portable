@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -13,7 +13,7 @@ import { parseJsonc } from "../src/mcp.js";
 import { makePassphraseProvider } from "../src/passphrase.js";
 import { BAD_BUNDLE, decryptBundle, encryptBundle, type BundlePayload } from "../src/secrets.js";
 import { FakeOpencode } from "./fake.js";
-import { makeSource, tmp, write } from "./helpers.js";
+import { IS_WIN, makeSource, privateTmpEnv, tmp, write } from "./helpers.js";
 
 const PASS = "correct horse battery";
 const KEY1 = "sk-ant-SECRET-111";
@@ -29,17 +29,15 @@ const staticPass = (p = PASS) => makePassphraseProvider({ env: { OPENCODE_PORTAB
 const noPass = () => makePassphraseProvider({ env: {}, isTTY: false });
 
 let fake: FakeOpencode;
-let savedTmp: string | undefined;
+let restoreTmp: () => void;
 beforeEach(() => {
-  // A private TMPDIR per test, so leftover checks are not disturbed by other test files running in parallel.
-  savedTmp = process.env.TMPDIR;
-  process.env.TMPDIR = mkdtempSync(join(tmpdir(), "ocm-privtmp-"));
+  // A private temp dir per test, so leftover checks are not disturbed by other test files running in parallel.
+  restoreTmp = privateTmpEnv(tmp("ocm-privtmp-"));
   fake = new FakeOpencode();
 });
 afterEach(() => {
   fake.restore();
-  if (savedTmp === undefined) delete process.env.TMPDIR;
-  else process.env.TMPDIR = savedTmp;
+  restoreTmp();
 });
 
 const tmpLeftovers = (): string[] => readdirSync(tmpdir()).filter((n) => n.startsWith("ocm-auth-") || n.startsWith("ocm-run-") || n.startsWith("ocm-sessions-") || n.startsWith("ocm-stage-")).sort();
@@ -119,7 +117,7 @@ describe("passphrase handling", () => {
     await expect(p.get({})).resolves.toBe("short"); // import has no minimum
   });
 
-  it("reads --passphrase-file, strips the newline and warns about loose permissions", async () => {
+  it.skipIf(IS_WIN)("reads --passphrase-file, strips the newline and warns about loose permissions", async () => {
     const f = join(tmp(), "pw");
     writeFileSync(f, `${PASS}\n`);
     chmodSync(f, 0o644);
@@ -132,6 +130,12 @@ describe("passphrase handling", () => {
     await makePassphraseProvider({ file: f, isTTY: false, warn: (m) => w2.push(m) }).get({});
     expect(w2).toEqual([]);
     await expect(makePassphraseProvider({ file: join(tmp(), "none"), isTTY: false }).get({})).rejects.toThrow(/could not be read/);
+  });
+
+  it("reads --passphrase-file on every OS (no permission check on Windows)", async () => {
+    const f = join(tmp(), "pw2");
+    writeFileSync(f, `${PASS}\r\n`);
+    await expect(makePassphraseProvider({ file: f, isTTY: false }).get({ minLength: 12 })).resolves.toBe(PASS);
   });
 
   it("reads the environment variable", async () => {
@@ -202,7 +206,7 @@ describe("export with credentials", () => {
     expect(tmpLeftovers()).toEqual(before);
     // the program was given a private stdout file
     const exp = fake.callModes().find((c) => c.args[0] === "auth" && c.args[1] === "export")!;
-    expect(exp.stdoutMode).toBe(0o600);
+    if (!IS_WIN) expect(exp.stdoutMode).toBe(0o600); // POSIX file modes do not exist on Windows
     // the MCP config in the archive is still redacted
     const { files } = await readArchive(out);
     expect(files.get("mcp/mcp.json")!.toString()).toContain("{env:GITHUB_TOKEN}");
@@ -312,7 +316,7 @@ describe("import with credentials", () => {
     const st = fake.state(tp);
     expect(st.authImports).toHaveLength(1);
     expect(JSON.parse(st.authImports![0].content)).toEqual(AUTH);
-    expect(st.authImports![0].mode).toBe(0o600);
+    if (!IS_WIN) expect(st.authImports![0].mode).toBe(0o600);
     expect(existsSync(st.authImports![0].file)).toBe(false);
     expect(tmpLeftovers()).toEqual(before);
     const cfg = readFileSync(join(tgt.configDir, "opencode.jsonc"), "utf8");
@@ -417,7 +421,7 @@ describe("import with credentials", () => {
       delete process.env.OPENCODE_PORTABLE_PASSPHRASE;
     }
     const st = fake.state(tp);
-    expect(st.authImports![0].mode).toBe(0o600);
+    if (!IS_WIN) expect(st.authImports![0].mode).toBe(0o600);
     expect(existsSync(st.authImports![0].file)).toBe(false);
     expect(tmpLeftovers()).toEqual(before);
     const text = lines.join("\n");

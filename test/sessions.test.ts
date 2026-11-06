@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -292,7 +292,7 @@ describe("sessions import", () => {
 
   it("checksums cover session files: a tampered transcript is rejected", async () => {
     const { out, root } = await exportSessions([sess("ses_1", "p", "/o/x", 1)], [{ id: "p", canonical: "/o/x" }]);
-    const x = mkdtempSync(join(root, "x-"));
+    const x = tmp("ocm-x-");
     await tar.x({ file: out, cwd: x });
     writeFileSync(join(x, "sessions", "ses_1.json"), '{"info":{"id":"ses_1"},"messages":["tampered"]}');
     const bad = join(root, "bad.ocm");

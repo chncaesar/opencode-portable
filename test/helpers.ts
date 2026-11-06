@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -32,8 +32,42 @@ export const MAIN_CONFIG = `{
 }
 `;
 
+export const IS_WIN = process.platform === "win32";
+
+const created: string[] = [];
+
+/** Point the process temp dir at a private dir (os.tmpdir() reads TMPDIR on POSIX and TEMP/TMP on Windows). */
+export function privateTmpEnv(dir: string): () => void {
+  const keys = ["TMPDIR", "TEMP", "TMP"];
+  const saved = keys.map((k) => [k, process.env[k]] as const);
+  for (const k of keys) process.env[k] = dir;
+  return () => {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  };
+}
+
+/** Create a directory symlink. Returns false when the OS does not allow it (Windows without Developer Mode). */
+export function trySymlinkDir(target: string, path: string): boolean {
+  try {
+    symlinkSync(target, path, IS_WIN ? "junction" : "dir");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Create a temp dir that the global afterAll (test/setup.ts) removes. */
 export function tmp(prefix = "ocm-test-"): string {
-  return mkdtempSync(join(tmpdir(), prefix));
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  created.push(d);
+  return d;
+}
+
+export function cleanupTmp(): void {
+  for (const d of created.splice(0).reverse()) rmSync(d, { recursive: true, force: true });
 }
 
 export function write(p: string, content: string): void {
@@ -42,7 +76,7 @@ export function write(p: string, content: string): void {
 }
 
 /** Build a fake source profile. Never touches the real ~/.config/opencode. */
-export function makeSource(): { root: string; configDir: string; stateDir: string; home: string } {
+export function makeSource(): { root: string; configDir: string; stateDir: string; home: string; symlinked: boolean } {
   const root = tmp();
   const configDir = join(root, "config");
   const stateDir = join(root, "state");
@@ -59,7 +93,9 @@ export function makeSource(): { root: string; configDir: string; stateDir: strin
   write(join(configDir, "AGENTS.md.bak-2026"), "bak");
   const ext = join(root, "external-skills");
   write(join(ext, "s1", "SKILL.md"), "skill one");
-  symlinkSync(ext, join(configDir, "skills"));
+  // A junction works without special rights on Windows; if even that fails, copy so the other assertions still run.
+  const symlinked = trySymlinkDir(ext, join(configDir, "skills"));
+  if (!symlinked) write(join(configDir, "skills", "s1", "SKILL.md"), "skill one");
   write(join(stateDir, "kv.json"), '{"a":1}');
   write(join(stateDir, "model.json"), '{"m":1}');
   write(join(stateDir, "prompt-history.jsonl"), '{"p":"hi"}\n');
@@ -67,5 +103,5 @@ export function makeSource(): { root: string; configDir: string; stateDir: strin
   write(join(stateDir, "session.json"), "{}");
   write(join(stateDir, "plugin-meta.json"), "{}");
   write(join(stateDir, "locks", "l"), "");
-  return { root, configDir, stateDir, home: "/home/zjc" };
+  return { root, configDir, stateDir, home: "/home/zjc", symlinked };
 }

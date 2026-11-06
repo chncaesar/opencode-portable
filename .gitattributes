@@ -1,0 +1,2 @@
+# Keep line endings stable on every OS so fixtures and checksums do not change on Windows checkouts.
+* text=auto eol=lf

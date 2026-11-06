@@ -1,0 +1,35 @@
+# Publishes to npm when a tag like v0.1.0 is pushed.
+# Setup (once): create an npm automation token and store it as the repository secret NPM_TOKEN
+# (Settings > Secrets and variables > Actions). Never commit the token.
+# The tag must match the version in package.json.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # needed for npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: Check the tag matches package.json
+        run: |
+          v="v$(node -p "require('./package.json').version")"
+          if [ "$v" != "${GITHUB_REF_NAME}" ]; then echo "Tag ${GITHUB_REF_NAME} does not match package.json ($v)"; exit 1; fi
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

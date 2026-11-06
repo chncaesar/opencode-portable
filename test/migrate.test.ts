@@ -28,7 +28,8 @@ function listFiles(dir: string, base = dir): string[] {
 
 describe("export", () => {
   it("includes the right files and excludes the wrong ones", async () => {
-    const { res } = await exportAll(makeSource());
+    const src = makeSource();
+    const { res } = await exportAll(src);
     const paths = res.manifest.files.map((f) => f.path);
     expect(paths).toContain("config/opencode.jsonc");
     expect(paths).toContain("config/skills/s1/SKILL.md");
@@ -39,7 +40,7 @@ describe("export", () => {
     for (const bad of ["service.json", "node_modules", ".bak", "session.json", "locks", "plugin-meta"]) {
       expect(paths.some((p) => p.includes(bad))).toBe(false);
     }
-    expect(res.manifest.links.map((l) => l.path)).toContain("config/skills");
+    if (src.symlinked) expect(res.manifest.links.map((l) => l.path)).toContain("config/skills");
   });
 
   it("config tier strips the mcp block", async () => {

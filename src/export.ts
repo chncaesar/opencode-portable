@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ArchiveBuilder, FORMAT_VERSION, type ArchiveEntry, type Manifest } from "./archive.js";
-import { opencodeBin, runOpencode } from "./opencode.js";
+import { describeFinding, scanFile, type SecretFinding } from "./scan.js";
+import { opencodeBin, runOpencode, spawnSpec } from "./opencode.js";
 import { authLabels, BUNDLE_NAME, encryptBundle, validateAuthArray, type BundlePayload } from "./secrets.js";
 import { exportSessionsInto } from "./sessions.js";
 import { logError, resolveDirs, toolVersion, UserError, type DirOptions, type Tier } from "./common.js";
@@ -21,6 +22,8 @@ export interface ExportOptions extends DirOptions {
   keepSecrets?: boolean;
   /** Passphrase for the credentials bundle, or a function that asks for it only when a bundle is needed. */
   passphrase?: string | (() => Promise<string>);
+  /** Fail (UserError, no archive kept) when the scanner finds likely inline secrets in config files. */
+  failOnSecrets?: boolean;
   since?: string;
   projects?: string[];
   maxSessions?: number;
@@ -39,7 +42,8 @@ export interface ExportResult {
 function detectOpencodeVersion(bin: string | null | undefined): string | null {
   if (bin === null) return null;
   try {
-    const v = execFileSync(bin ?? opencodeBin(), ["--version"], { timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const spec = spawnSpec(bin ?? opencodeBin(), ["--version"]);
+    const v = execFileSync(spec.command, spec.args, { timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], shell: spec.shell, windowsHide: true });
     return v.trim() || null;
   } catch {
     return null;
@@ -153,6 +157,11 @@ export async function runExport(opts: ExportOptions): Promise<ExportResult> {
     }
   }
 
+  const findings: SecretFinding[] = entries.flatMap((e) => (e.tier === "config" ? scanFile(e.path, e.data) : []));
+  for (const f of findings) warnings.push(`Possible inline secret: ${describeFinding(f)}`);
+  if (opts.failOnSecrets && findings.length > 0) {
+    throw new UserError(`${findings.length} possible inline secret(s) found in config files (see the notes above; values are never printed). Move them to environment variables with {env:NAME}, or run without --fail-on-secrets.\n${findings.map((f) => `  - ${describeFinding(f)}`).join("\n")}`);
+  }
   const builder = new ArchiveBuilder();
   try {
     for (const e of entries) builder.add(e.path, e.tier, e.data);
@@ -214,6 +223,7 @@ export async function runExport(opts: ExportOptions): Promise<ExportResult> {
       ...(mcpInfo ? { mcp: mcpInfo, mcpLayout } : {}),
       ...(sessionInfo ? { sessions: sessionInfo } : {}),
       ...(credentialsInfo ? { credentials: credentialsInfo } : {}),
+      ...(findings.length ? { inlineSecrets: findings } : {}),
     });
     return { out, manifest, warnings };
   } finally {

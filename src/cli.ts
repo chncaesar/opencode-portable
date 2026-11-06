@@ -34,6 +34,7 @@ Options:
   --session-timeout SEC   Import sessions: time limit per session (default 120)
   --keep-secrets          Export: also store MCP secret values in the encrypted bundle
                           (needs the credentials tier and mcp)
+  --fail-on-secrets       Export: exit 1 if config files hold likely inline secrets
   --restore-mcp-secrets   Import with --apply: write the real MCP secret values back into
                           opencode.jsonc (servers added or replaced in this run only)
   --passphrase-file PATH  Read the credentials passphrase from a file (chmod 600).
@@ -67,6 +68,7 @@ export async function main(argv: string[], out: (s: string) => void = console.lo
         "overwrite-mcp": { type: "string", multiple: true },
         "overwrite-config": { type: "boolean" },
         "keep-secrets": { type: "boolean" },
+        "fail-on-secrets": { type: "boolean" },
         "restore-mcp-secrets": { type: "boolean" },
         "passphrase-file": { type: "string" },
         passphrase: { type: "string" },
@@ -113,6 +115,7 @@ export async function main(argv: string[], out: (s: string) => void = console.lo
         maxSessions: positiveInt(values["max-sessions"], "--max-sessions"),
         sanitizeSessions: values["sanitize-sessions"],
         keepSecrets: values["keep-secrets"],
+        failOnSecrets: values["fail-on-secrets"],
         passphrase: () => pp.get({ confirm: true, minLength: MIN_PASSPHRASE_LENGTH }),
         log: (s) => out(s),
       });
@@ -151,11 +154,15 @@ export async function main(argv: string[], out: (s: string) => void = console.lo
         sessionTimeout: positiveInt(values["session-timeout"], "--session-timeout"),
       });
       if (values.apply) {
-        const res = applyPlan(plan);
-        const outcome = await applySessionsPlan(plan, (s) => out(s));
-        const cred = await applyCredentialsPlan(plan);
-        out(formatPlan(plan, res, outcome, cred));
-        return (outcome && outcome.result.failed.length > 0) || cred?.failed ? 1 : 0;
+        try {
+          const res = applyPlan(plan);
+          const outcome = await applySessionsPlan(plan, (s) => out(s));
+          const cred = await applyCredentialsPlan(plan);
+          out(formatPlan(plan, res, outcome, cred));
+          return (outcome && outcome.result.failed.length > 0) || cred?.failed ? 1 : 0;
+        } finally {
+          disposePlan(plan);
+        }
       }
       disposePlan(plan);
       out(formatPlan(plan));

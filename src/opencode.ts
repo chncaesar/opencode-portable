@@ -33,6 +33,29 @@ export function opencodeBin(): string {
   return process.env.OPENCODE_BIN || "opencode";
 }
 
+/** Quote one argument for cmd.exe. Used only for .cmd/.bat launchers on Windows. */
+export function winCmdQuote(arg: string): string {
+  if (arg !== "" && !/[\s"&|<>^%()!,;=]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+export interface SpawnSpec {
+  command: string;
+  args: string[];
+  shell: boolean;
+}
+
+/**
+ * How to start the program. Node refuses to start .cmd/.bat files without a shell on Windows
+ * (npm installs OpenCode as opencode.cmd), so those get a shell and quoted arguments.
+ */
+export function spawnSpec(bin: string, args: string[], platform: string = process.platform): SpawnSpec {
+  if (platform === "win32" && /\.(cmd|bat)$/i.test(bin)) {
+    return { command: winCmdQuote(bin), args: args.map(winCmdQuote), shell: true };
+  }
+  return { command: bin, args, shell: false };
+}
+
 /** Run the opencode binary. Never throws; inspect the result. */
 export function runOpencode(args: string[], timeoutMs = 120_000): Promise<RunResult> {
   // OpenCode v2.2.5 cuts its stdout short (at a multiple of 64 KiB) when it is a pipe and the output is large.
@@ -66,7 +89,8 @@ export function runOpencode(args: string[], timeoutMs = 120_000): Promise<RunRes
     };
     let child;
     try {
-      child = spawn(opencodeBin(), args, { stdio: ["ignore", outFd, "pipe"] });
+      const spec = spawnSpec(opencodeBin(), args);
+      child = spawn(spec.command, spec.args, { stdio: ["ignore", outFd, "pipe"], shell: spec.shell, windowsHide: true });
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       return done({ code: null, timedOut: false, missing: err.code === "ENOENT", message: err.message });

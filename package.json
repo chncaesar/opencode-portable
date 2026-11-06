@@ -2,6 +2,22 @@
   "name": "opencode-portable",
   "version": "0.1.0",
   "description": "Move OpenCode config, MCP servers and user state between machines",
+  "author": "Jiachuan Zhu",
+  "keywords": [
+    "opencode",
+    "migration",
+    "backup",
+    "mcp",
+    "sessions"
+  ],
+  "homepage": "https://github.com/chncaesar/opencode-portable#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chncaesar/opencode-portable.git"
+  },
+  "bugs": {
+    "url": "https://github.com/chncaesar/opencode-portable/issues"
+  },
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -12,13 +28,14 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1",

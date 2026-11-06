@@ -2,6 +2,12 @@
 
 Move your OpenCode config, MCP servers and user state to another machine. Covers the config, mcp, state, sessions and credentials tiers.
 
+Unofficial: this project is not affiliated with or endorsed by the OpenCode project.
+
+## Why this exists
+
+OpenCode has no supported way to move its state to another machine (upstream feature request: anomalyco/opencode#54534), so this tool does it with OpenCode's own commands and plain files.
+
 ## Install
 
 Requires Node 20 or newer.
@@ -36,6 +42,7 @@ Options:
 - `--import-mcp-disabled` add new MCP servers with `enabled: false`.
 - `--overwrite-mcp NAME` replace an existing MCP server (repeatable). Without it, existing servers are never changed.
 - `--overwrite-config` overwrite differing files. By default they are written as `NAME.incoming`.
+- `--fail-on-secrets` (export) exits with an error if the config files hold likely inline secrets.
 - `--config-dir`, `--state-dir`, `--home` override locations. `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured.
 
 ## Sessions
@@ -64,6 +71,10 @@ A project with no match is detached and its sessions are skipped. Fix it with a 
 Sessions already on this machine are skipped when the local copy is the same age or newer (OpenCode resets the update time on import, so an imported copy always looks newer). If the archive copy is newer than the local one, the session is reported as a conflict and left alone, because updating an existing session is not supported. With `--apply`, sessions are imported one at a time (`--session-timeout SEC`, default 120), a failure does not stop the rest, and a summary is printed. Details of failures go to `opencode-portable.log` in the state directory.
 
 On `--apply` the confirmed mapping is written to `<archive>.mapping.json` and reused on later imports. An explicit `--map` still wins over the file. Message text is never rewritten; only the target directory is chosen.
+
+## Inline secret warnings
+
+When the config tier is exported, `opencode.jsonc` (outside the `mcp` block, which is handled separately), `tui.json` and plugin scripts (`plugins/*.js`, `.mjs`, `.ts`, `.json`) are scanned for likely inline secrets: values under keys such as key, token, secret or password, and well-known token formats (`sk-`, `ghp_`, `github_pat_`, `xoxb-`, `AKIA...`, long Bearer tokens). Values already written as `{env:NAME}` or `{file:...}` are fine. Findings are warnings that show the file and location only, never the value; the export still contains the file as is. Add `--fail-on-secrets` to stop instead. Markdown commands and skills are not scanned.
 
 ## Credentials and security model
 
@@ -103,6 +114,10 @@ Both OpenCode MCP layouts are supported: the older `mcp.<name>` entries (with `e
 - Every file that will be changed is first copied to `<file>.bak-<timestamp>`.
 - Archive checksums (SHA-256) are verified before anything is read.
 - Errors are shown in plain English. Technical details go to `opencode-portable.log` in the state directory.
+
+## Platforms
+
+Tested on Linux in the development environment; CI runs the tests on Linux, macOS and Windows with Node 20 and 22. On Windows, `opencode.cmd` launchers are supported, file permission checks (`chmod 600`) do not apply, and symlinked folders in the config are archived as regular files.
 
 ## Development
 
