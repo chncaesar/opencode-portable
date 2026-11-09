@@ -8,6 +8,7 @@ import { runExport } from "../src/export.js";
 import { applyPlan, planImport } from "../src/import.js";
 import { parseJsonc } from "../src/mcp.js";
 import type { Tier } from "../src/common.js";
+import { toolVersion } from "../src/common.js";
 import { makeSource, SECRETS, tmp, write } from "./helpers.js";
 
 async function exportAll(src: ReturnType<typeof makeSource>, tiers: Tier[] = ["config", "mcp", "state"]) {
@@ -206,5 +207,23 @@ describe("import", () => {
     expect(code).toBe(1);
     expect(lines.join("\n")).not.toMatch(/at .*\(.*:\d+/);
     writeFileSync(join(tmp(), "x"), "");
+  });
+});
+
+describe("cli", () => {
+  it("prints the version for --version and -v without needing a command", async () => {
+    for (const args of [["--version"], ["-v"]]) {
+      const lines: string[] = [];
+      const code = await main(args, (s) => lines.push(s));
+      expect(code).toBe(0);
+      expect(lines.join("\n")).toBe(toolVersion());
+      expect(lines.join("\n")).toMatch(/^\d+\.\d+\.\d+/);
+    }
+  });
+
+  it("still exits 1 with help when no command is given", async () => {
+    const lines: string[] = [];
+    expect(await main([], (s) => lines.push(s))).toBe(1);
+    expect(lines.join("\n")).toMatch(/--version/);
   });
 });

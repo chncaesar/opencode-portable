@@ -45,6 +45,7 @@ Options:
   --config-dir DIR        Override the OpenCode config directory
   --state-dir DIR         Override the OpenCode state directory
   --home DIR              Override the home directory (used for default path rule)
+  -v, --version           Print the version
   -h, --help              Show this help
 `;
 
@@ -85,10 +86,15 @@ export async function main(argv: string[], out: (s: string) => void = console.lo
         "config-dir": { type: "string" },
         "state-dir": { type: "string" },
         home: { type: "string" },
+        version: { type: "boolean", short: "v" },
         help: { type: "boolean", short: "h" },
       },
     });
     const [cmd, arg] = positionals;
+    if (values.version) {
+      out(toolVersion());
+      return 0;
+    }
     if (values.help || !cmd) {
       out(HELP);
       return values.help ? 0 : 1;
