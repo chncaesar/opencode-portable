@@ -10,7 +10,7 @@ OpenCode 目前没有官方支持的方式把状态迁移到另一台机器（�
 
 ## 安装
 
-需要 Node 20 或更新版本。
+需要 Node 20 或更新版本，以及 OpenCode v2.x。会话和凭据层级会调用 `opencode api`、`opencode session export/import` 和 `opencode auth export/import`，这些命令只在 v2.x 中存在——OpenCode v1（以及 `opencode-ai` 1.x 包）不受支持。
 
 ```
 npm install -g opencode-portable
@@ -49,7 +49,7 @@ opencode-portable import my.ocm --apply
 
 ## 会话
 
-会话迁移是可选功能：`--tiers config,mcp,state,sessions`。工具不读 OpenCode 的数据库。它通过运行中的 OpenCode 服务列出会话（`opencode api GET /api/session`，跟随分页），用 `opencode session export` 逐个导出，再在新机器上用 `opencode session import --directory DIR` 逐个导入。两台机器上都要有 `opencode` 在 PATH 里（或用 `OPENCODE_BIN` 指定），并且后台服务在运行。
+会话迁移是可选功能：`--tiers config,mcp,state,sessions`。工具不读 OpenCode 的数据库。它通过运行中的 OpenCode 服务列出会话（`opencode api GET /api/session`，跟随分页），用 `opencode session export` 逐个导出，再在新机器上用 `opencode session import --directory DIR` 逐个导入。两台机器上都要有 `opencode` 在 PATH 里（或用 `OPENCODE_BIN` 指定），并且后台服务在运行。它必须是 v2.x 的二进制——用 `opencode --version` 确认；如果装了多个版本，请用 `OPENCODE_BIN` 显式指定 v2.x。
 
 导出过滤：
 

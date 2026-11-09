@@ -12,7 +12,7 @@ OpenCode has no supported way to move its state to another machine (upstream fea
 
 ## Install
 
-Requires Node 20 or newer.
+Requires Node 20 or newer, and OpenCode v2.x. The session and credential tiers shell out to `opencode api`, `opencode session export/import` and `opencode auth export/import`, which only exist in v2.x — OpenCode v1 (and the `opencode-ai` 1.x package) is not supported.
 
 ```
 npm install -g opencode-portable
@@ -51,7 +51,7 @@ Options:
 
 ## Sessions
 
-Sessions are opt-in: `--tiers config,mcp,state,sessions`. The tool does not read OpenCode's database. It lists sessions through the running OpenCode service (`opencode api GET /api/session`, following pagination), exports each with `opencode session export`, and imports each on the new machine with `opencode session import --directory DIR`. The `opencode` program must be on PATH (or set `OPENCODE_BIN`) and its background service must be running, on both machines.
+Sessions are opt-in: `--tiers config,mcp,state,sessions`. The tool does not read OpenCode's database. It lists sessions through the running OpenCode service (`opencode api GET /api/session`, following pagination), exports each with `opencode session export`, and imports each on the new machine with `opencode session import --directory DIR`. The `opencode` program must be on PATH (or set `OPENCODE_BIN`) and its background service must be running, on both machines. It must be the v2.x binary — check with `opencode --version`, and if you have multiple installations, set `OPENCODE_BIN` to the v2.x one explicitly.
 
 Export filters:
 
