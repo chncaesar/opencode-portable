@@ -15,7 +15,7 @@ OpenCode has no supported way to move its state to another machine (upstream fea
 Requires Node 20 or newer, and OpenCode v2.x. The session and credential tiers shell out to `opencode api`, `opencode session export/import` and `opencode auth export/import`, which only exist in v2.x — OpenCode v1 (and the `opencode-ai` 1.x package) is not supported.
 
 ```
-npm install -g opencode-portable
+npm install -g @chncaesar/opencode-portable
 # or from a checkout
 npm install && npm run build && npm link
 ```

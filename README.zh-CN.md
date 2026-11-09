@@ -13,7 +13,7 @@ OpenCode 目前没有官方支持的方式把状态迁移到另一台机器（�
 需要 Node 20 或更新版本，以及 OpenCode v2.x。会话和凭据层级会调用 `opencode api`、`opencode session export/import` 和 `opencode auth export/import`，这些命令只在 v2.x 中存在——OpenCode v1（以及 `opencode-ai` 1.x 包）不受支持。
 
 ```
-npm install -g opencode-portable
+npm install -g @chncaesar/opencode-portable
 # 或从源码安装
 npm install && npm run build && npm link
 ```

@@ -1,5 +1,5 @@
 {
-  "name": "opencode-portable",
+  "name": "@chncaesar/opencode-portable",
   "version": "0.1.0",
   "description": "Move OpenCode config, MCP servers and user state between machines",
   "author": "Jiachuan Zhu",
