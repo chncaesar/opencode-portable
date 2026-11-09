@@ -79,14 +79,18 @@ describe("sessions export", () => {
   });
 
   it("filters: since, project (id and path), max-sessions, and keeps children", async () => {
+    // Use real platform-native absolute paths: on Windows, path.resolve("/w/a") becomes C:\w\a.
+    const A = tmp("ocm-fa-");
+    const AB = join(A, "sub");
+    const B = tmp("ocm-fb-");
     const list = [
-      sess("ses_new", "pA", "/w/a", 1),
-      sess("ses_mid", "pA", "/w/a/sub", 20),
-      sess("ses_old", "pA", "/w/a", 200),
-      sess("ses_b", "pB", "/w/b", 2),
-      sess("ses_kid", "pB", "/w/b", 300, { parentID: "ses_b" }),
+      sess("ses_new", "pA", A, 1),
+      sess("ses_mid", "pA", AB, 20),
+      sess("ses_old", "pA", A, 200),
+      sess("ses_b", "pB", B, 2),
+      sess("ses_kid", "pB", B, 300, { parentID: "ses_b" }),
     ];
-    const projects = [{ id: "pA", canonical: "/w/a" }, { id: "pB", canonical: "/w/b" }];
+    const projects = [{ id: "pA", canonical: A }, { id: "pB", canonical: B }];
     const ids = async (extra: Record<string, unknown>) => {
       const r = await exportSessions(list, projects, extra);
       return (await readArchive(r.out)).manifest.files.filter((f) => f.path !== "sessions/index.json" && f.tier === "sessions").map((f) => f.path.slice(9, -5)).sort();
@@ -94,8 +98,8 @@ describe("sessions export", () => {
     expect(await ids({ since: "30d" })).toEqual(["ses_b", "ses_kid", "ses_mid", "ses_new"]);
     expect(await ids({ since: "2000-01-01" })).toHaveLength(5);
     expect(await ids({ projects: ["pB"] })).toEqual(["ses_b", "ses_kid"]);
-    expect(await ids({ projects: ["/w/a"] })).toEqual(["ses_mid", "ses_new", "ses_old"]);
-    expect(await ids({ projects: ["/w/a/sub"] })).toEqual(["ses_mid"]);
+    expect(await ids({ projects: [A] })).toEqual(["ses_mid", "ses_new", "ses_old"]);
+    expect(await ids({ projects: [AB] })).toEqual(["ses_mid"]);
     expect(await ids({ maxSessions: 1 })).toEqual(["ses_new"]);
     expect(await ids({ maxSessions: 2, projects: ["pB"] })).toEqual(["ses_b", "ses_kid"]);
     await expect(ids({ since: "yesterday" })).rejects.toThrow(/Invalid --since/);
@@ -322,9 +326,11 @@ describe("sessions import", () => {
 describe("misc", () => {
   it("default scan roots are the home dir plus existing common code folders", async () => {
     const { defaultScanRoots } = await import("../src/sessions.js");
-    const have = new Set(["/h", "/work", "/h/code", "/h/src"]);
-    expect(defaultScanRoots("/h", (p) => have.has(p))).toEqual(["/h", "/work", "/h/code", "/h/src"]);
-    expect(defaultScanRoots("/h", () => false)).toEqual([]);
+    // join() is platform-dependent (\\ on Windows), so build the expected paths the same way.
+    const home = process.platform === "win32" ? "C:\\h" : "/h";
+    const have = new Set([home, "/work", join(home, "code"), join(home, "src")]);
+    expect(defaultScanRoots(home, (p) => have.has(p))).toEqual([home, "/work", join(home, "code"), join(home, "src")]);
+    expect(defaultScanRoots(home, () => false)).toEqual([]);
   });
 
   it("dry run warns when the target service is unreachable; apply refuses", async () => {
