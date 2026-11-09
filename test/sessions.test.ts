@@ -8,6 +8,8 @@ import { main } from "../src/cli.js";
 import { runExport } from "../src/export.js";
 import { applyPlan, applySessionsPlan, planImport } from "../src/import.js";
 import { inspectArchive } from "../src/inspect.js";
+import { selectSessions } from "../src/sessions.js";
+import type { SessionInfo } from "../src/opencode.js";
 import { FakeOpencode, type FakeSession } from "./fake.js";
 import { tmp, write } from "./helpers.js";
 
@@ -78,7 +80,7 @@ describe("sessions export", () => {
     expect(fake.calls().find((a) => a[1] === "export")).toContain("--sanitize");
   });
 
-  it("filters: since, project (id and path), max-sessions, and keeps children", async () => {
+  it("filters: since, project (id and path), max-sessions, and keeps children", () => {
     // Use real platform-native absolute paths: on Windows, path.resolve("/w/a") becomes C:\w\a.
     const A = tmp("ocm-fa-");
     const AB = join(A, "sub");
@@ -91,18 +93,17 @@ describe("sessions export", () => {
       sess("ses_kid", "pB", B, 300, { parentID: "ses_b" }),
     ];
     const projects = [{ id: "pA", canonical: A }, { id: "pB", canonical: B }];
-    const ids = async (extra: Record<string, unknown>) => {
-      const r = await exportSessions(list, projects, extra);
-      return (await readArchive(r.out)).manifest.files.filter((f) => f.path !== "sessions/index.json" && f.tier === "sessions").map((f) => f.path.slice(9, -5)).sort();
-    };
-    expect(await ids({ since: "30d" })).toEqual(["ses_b", "ses_kid", "ses_mid", "ses_new"]);
-    expect(await ids({ since: "2000-01-01" })).toHaveLength(5);
-    expect(await ids({ projects: ["pB"] })).toEqual(["ses_b", "ses_kid"]);
-    expect(await ids({ projects: [A] })).toEqual(["ses_mid", "ses_new", "ses_old"]);
-    expect(await ids({ projects: [AB] })).toEqual(["ses_mid"]);
-    expect(await ids({ maxSessions: 1 })).toEqual(["ses_new"]);
-    expect(await ids({ maxSessions: 2, projects: ["pB"] })).toEqual(["ses_b", "ses_kid"]);
-    await expect(ids({ since: "yesterday" })).rejects.toThrow(/Invalid --since/);
+    // Pure filter logic: no export, no child processes, so this is fast on every OS.
+    const ids = (extra: { since?: string; projects?: string[]; maxSessions?: number }) =>
+      selectSessions(list as unknown as SessionInfo[], projects, extra, []).map((s) => s.id).sort();
+    expect(ids({ since: "30d" })).toEqual(["ses_b", "ses_kid", "ses_mid", "ses_new"]);
+    expect(ids({ since: "2000-01-01" })).toHaveLength(5);
+    expect(ids({ projects: ["pB"] })).toEqual(["ses_b", "ses_kid"]);
+    expect(ids({ projects: [A] })).toEqual(["ses_mid", "ses_new", "ses_old"]);
+    expect(ids({ projects: [AB] })).toEqual(["ses_mid"]);
+    expect(ids({ maxSessions: 1 })).toEqual(["ses_new"]);
+    expect(ids({ maxSessions: 2, projects: ["pB"] })).toEqual(["ses_b", "ses_kid"]);
+    expect(() => ids({ since: "yesterday" })).toThrow(/Invalid --since/);
   });
 
   it("gives a plain error when opencode is missing", async () => {
